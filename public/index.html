@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#06c755" />
+  <title>LINE Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">◉</span><span>LINE</span><span class="brand-dot"></span></div>
+      <div class="side-actions" aria-label="Navigation"><button class="nav-icon active" title="Chats" aria-label="Chats">▤<i></i></button><button class="nav-icon" title="Friends" aria-label="Friends">♧</button><button class="nav-icon" title="More" aria-label="More">•••</button></div>
+      <div class="sidebar-bottom"><div class="my-avatar" id="myAvatar">?</div><button class="settings" id="logoutButton" title="Log out" aria-label="Log out">↪</button></div>
+    </aside>
+    <section class="inbox">
+      <div class="inbox-top"><div><p class="eyebrow">YOUR SPACE</p><h1>Chats <span class="chat-count">1</span></h1></div><button class="compose" title="New chat" aria-label="New chat">＋</button></div>
+      <label class="search"><span>⌕</span><input id="searchInput" placeholder="Search chats" aria-label="Search chats" /></label>
+      <div class="filter-row"><button class="filter active">All <span>1</span></button><button class="filter">Unread</button><button class="filter">Groups</button></div>
+      <div class="section-label">PINNED</div>
+      <button class="conversation selected" id="roomCard"><div class="room-avatar"><span>✳</span><b class="online"></b></div><div class="conversation-copy"><div class="conversation-title"><strong>Good vibes only</strong><time id="lastTime">now</time></div><div class="conversation-preview" id="lastPreview">Your space to say hello 👋</div></div></button>
+      <div class="empty-note">A little room for good conversations.</div>
+      <div class="sidebar-footer"><span class="status-dot"></span> All systems friendly</div>
+    </section>
+    <section class="chat-panel">
+      <header class="chat-header"><div class="room-avatar header-avatar"><span>✳</span><b class="online"></b></div><div class="room-heading"><h2>Good vibes only</h2><p><span class="status-dot"></span> You’re here <span class="subtle">· Public room</span></p></div><div class="header-actions"><button title="Search in chat" aria-label="Search in chat">⌕</button><button title="More options" aria-label="More options">•••</button></div></header>
+      <div class="welcome-banner"><div class="welcome-sparkle">✦</div><div><strong>A cozy corner of the internet.</strong><p>Say hi, share a thought, and make someone’s day.</p></div><button id="dismissWelcome" aria-label="Dismiss">×</button></div>
+      <div class="messages" id="messages" aria-live="polite"><div class="day-divider"><span>TODAY</span></div><div class="loading">Bringing the room to life<span> · · ·</span></div></div>
+      <form class="composer" id="chatForm"><div class="composer-toolbar"><button type="button" aria-label="Add attachment" title="Add attachment">＋</button><button type="button" aria-label="Stickers" title="Stickers">☺</button><button type="button" aria-label="Emoji" title="Emoji">✦</button></div><div class="input-row"><textarea id="messageInput" rows="1" maxlength="2000" placeholder="Write a message…" aria-label="Write a message"></textarea><button class="send-button" type="submit" aria-label="Send message" title="Send">➤</button></div><div class="composer-hint">Press <kbd>Enter</kbd> to send <span>·</span> <kbd>Shift + Enter</kbd> for a new line</div></form>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status"></div>
+  <dialog id="nameDialog" class="name-dialog"><form id="authForm"><div class="dialog-mark">☺</div><p class="eyebrow">WELCOME TO THE ROOM</p><h2 id="authTitle">Create your account</h2><p class="dialog-copy">Sign up or log in to join the conversation.</p><input id="usernameInput" maxlength="24" placeholder="Username" required autocomplete="username" /><input id="passwordInput" type="password" minlength="8" maxlength="128" placeholder="Password (8+ characters)" required autocomplete="new-password" /><p class="auth-error" id="authError" aria-live="polite"></p><button class="join-button" id="authSubmit" type="submit">Create account <span>→</span></button><button class="mode-switch" id="authSwitch" type="button">Already have an account? Log in</button><p class="privacy-note">Usernames use letters, numbers, and underscores.</p></form></dialog>
+  <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body>
+</html>
