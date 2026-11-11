@@ -9,7 +9,7 @@
   const authError = document.querySelector('#authError');
   const toast = document.querySelector('#toast');
   const colors = ['#7b72d8', '#ed8a68', '#4eaa8b', '#d66b9e', '#5d8fce', '#bd8b45'];
-  let user = null; let registering = true; let toastTimer;
+  let user = null; let registering = true; let toastTimer; let currentRoom = 'public'; let roomRequest = 0;
   const escape = (value) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const timeLabel = (date) => new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).format(new Date(date));
@@ -26,19 +26,39 @@
     document.querySelector('#lastPreview').textContent = `${mine ? 'You: ' : `${message.author}: `}${message.text}`;
     document.querySelector('#lastTime').textContent = timeLabel(message.createdAt);
   }
-  async function loadHistory() {
+  async function loadHistory(roomId = currentRoom) {
+    const requestId = ++roomRequest;
+    messages.innerHTML = '<div class="day-divider"><span>TODAY</span></div><div class="loading">Loading messages…</div>';
     try {
-      const response = await fetch('/api/messages'); if (!response.ok) throw new Error();
-      const history = await response.json(); document.querySelector('.loading')?.remove();
+      const response = await fetch(`/api/messages?room=${encodeURIComponent(roomId)}`); if (!response.ok) throw new Error();
+      const history = await response.json(); if (requestId !== roomRequest) return; document.querySelector('.loading')?.remove();
       if (!history.length) { const empty = document.createElement('div'); empty.className = 'room-empty'; empty.innerHTML = '<div>✦</div><strong>It’s quiet in here…</strong><span>Be the first to say hello.</span>'; messages.appendChild(empty); }
       else history.forEach(addMessage);
     } catch { showToast('Could not load chat history. Refresh to try again.'); }
+  }
+  async function loadGroups() {
+    const response = await fetch('/api/groups'); if (!response.ok) return;
+    const groups = await response.json(); const list = document.querySelector('#groupList'); list.replaceChildren();
+    document.querySelector('#chatCount').textContent = groups.length;
+    for (const group of groups.filter((item) => item.id !== 'public')) {
+      const card = document.createElement('button'); card.className = 'conversation'; card.dataset.room = group.id;
+      card.innerHTML = `<div class="room-avatar"><span>♧</span></div><div class="conversation-copy"><div class="conversation-title"><strong>${escape(group.name)}</strong></div><div class="conversation-preview">Group chat</div></div>`;
+      card.addEventListener('click', () => selectRoom(group)); list.appendChild(card);
+    }
+  }
+  function selectRoom(room) {
+    currentRoom = room.id;
+    document.querySelectorAll('.conversation').forEach((card) => card.classList.toggle('selected', card.id === 'roomCard' ? room.id === 'public' : card.dataset.room === room.id));
+    document.querySelector('.room-heading h2').textContent = room.name;
+    document.querySelector('.room-heading .subtle').textContent = room.id === 'public' ? '· Public room' : '· Group chat';
+    document.querySelector('.welcome-banner').hidden = room.id !== 'public';
+    socket.emit('chat:select', room.id); loadHistory(room.id);
   }
   function enterChat(account) {
     user = { ...account, color: colors[Math.floor(Math.random() * colors.length)] };
     document.querySelector('#myAvatar').textContent = initials(user.username);
     document.querySelector('#myAvatar').style.background = user.color;
-    dialog.close(); socket.connect(); loadHistory();
+    dialog.close(); socket.connect(); loadGroups(); selectRoom({ id: 'public', name: 'Good vibes only' });
   }
   async function checkLogin() {
     try { const response = await fetch('/api/auth/me'); if (!response.ok) throw new Error(); enterChat(await response.json()); }
@@ -83,5 +103,27 @@
   socket.on('connect_error', () => { showToast('Chat connection lost. Please log in again.'); });
   socket.on('chat:notice', (notice) => { const line = document.createElement('div'); line.className = 'notice'; line.textContent = notice.text; messages.appendChild(line); messages.scrollTop = messages.scrollHeight; });
   document.querySelector('#dismissWelcome').addEventListener('click', (event) => event.currentTarget.closest('.welcome-banner').remove());
+  document.querySelector('#roomCard').addEventListener('click', () => selectRoom({ id: 'public', name: 'Good vibes only' }));
+  const groupDialog = document.querySelector('#groupDialog');
+  const groupForm = document.querySelector('#groupForm');
+  const groupNameInput = document.querySelector('#groupNameInput');
+  const groupMembersInput = document.querySelector('#groupMembersInput');
+  const groupError = document.querySelector('#groupError');
+  const closeGroupDialog = () => { groupDialog.close(); groupForm.reset(); groupError.textContent = ''; };
+  document.querySelector('#newGroupButton').addEventListener('click', () => {
+    groupError.textContent = ''; groupDialog.showModal(); groupNameInput.focus();
+  });
+  document.querySelector('#closeGroupDialog').addEventListener('click', closeGroupDialog);
+  document.querySelector('#cancelGroupDialog').addEventListener('click', closeGroupDialog);
+  groupForm.addEventListener('submit', async (event) => {
+    event.preventDefault(); groupError.textContent = '';
+    const submit = document.querySelector('#createGroupSubmit'); submit.disabled = true;
+    try {
+      const response = await fetch('/api/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: groupNameInput.value.trim(), usernames: groupMembersInput.value.split(',').map((value) => value.trim()).filter(Boolean) }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not create group.');
+      closeGroupDialog(); await loadGroups(); selectRoom(result); showToast('Group chat created.');
+    } catch (error) { groupError.textContent = error.message || 'Could not create group. Please try again.'; }
+    finally { submit.disabled = false; }
+  });
   document.querySelector('#searchInput').addEventListener('input', (event) => { const query = event.target.value.toLowerCase(); document.querySelectorAll('.message-row').forEach((row) => { row.hidden = !row.textContent.toLowerCase().includes(query); }); });
 })();
