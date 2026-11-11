@@ -19,12 +19,18 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 const messageSchema = new mongoose.Schema({
+  roomId: { type: String, default: 'public', required: true, index: true },
   author: { type: String, required: true, trim: true, maxlength: 32 },
   text: { type: String, required: true, trim: true, maxlength: 2000 },
   createdAt: { type: Date, default: Date.now },
 });
 messageSchema.index({ createdAt: -1 });
 const Message = mongoose.model('Message', messageSchema);
+const groupSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 40 },
+  members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+}, { timestamps: true });
+const Group = mongoose.model('Group', groupSchema);
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer);
@@ -67,10 +73,31 @@ app.get('/api/auth/me', async (req, res) => {
   res.json({ id: user._id, username: user.username });
 });
 app.get('/api/health', (_req, res) => res.json({ status: mongoose.connection.readyState === 1 ? 'ok' : 'connecting' }));
+app.get('/api/groups', async (req, res) => {
+  const user = await userFromToken(req.cookies.chat_token);
+  if (!user) return res.status(401).json({ error: 'Please log in.' });
+  const groups = await Group.find({ members: user._id }).select('_id name').sort({ updatedAt: -1 }).lean();
+  res.json([{ id: 'public', name: 'Good vibes only', isPublic: true }, ...groups.map((group) => ({ id: String(group._id), name: group.name }))]);
+});
+app.post('/api/groups', async (req, res) => {
+  const user = await userFromToken(req.cookies.chat_token);
+  if (!user) return res.status(401).json({ error: 'Please log in.' });
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const usernames = Array.isArray(req.body?.usernames) ? req.body.usernames.filter((value: unknown): value is string => typeof value === 'string').map((value: string) => value.trim()) : [];
+  if (!name || name.length > 40) return res.status(400).json({ error: 'Group name must be 1 to 40 characters.' });
+  const members = await User.find({ username: { $in: usernames } }).select('_id username').lean();
+  const missing = usernames.filter((username: string) => !members.some((member) => member.username === username));
+  if (missing.length) return res.status(400).json({ error: `User not found: ${missing.join(', ')}` });
+  const group = await Group.create({ name, members: [...new Set([String(user._id), ...members.map((member) => String(member._id))])] });
+  res.status(201).json({ id: String(group._id), name: group.name });
+});
 app.get('/api/messages', async (req, res) => {
-  if (!(await userFromToken(req.cookies.chat_token))) return res.status(401).json({ error: 'Please log in.' });
+  const user = await userFromToken(req.cookies.chat_token);
+  if (!user) return res.status(401).json({ error: 'Please log in.' });
+  const roomId = typeof req.query.room === 'string' ? req.query.room : 'public';
+  if (roomId !== 'public' && !(await Group.exists({ _id: roomId, members: user._id }))) return res.status(403).json({ error: 'You are not a member of this group.' });
   try {
-    const messages = await Message.find().sort({ createdAt: -1 }).limit(60).lean();
+    const messages = await Message.find(roomId === 'public' ? { $or: [{ roomId: 'public' }, { roomId: { $exists: false } }] } : { roomId }).sort({ createdAt: -1 }).limit(60).lean();
     res.json(messages.reverse());
   } catch {
     res.status(503).json({ error: 'Messages are temporarily unavailable.' });
@@ -89,14 +116,24 @@ io.use(async (socket, next) => {
   next();
 });
 io.on('connection', (socket) => {
+  socket.join('public');
+  socket.data.roomId = 'public';
   socket.broadcast.emit('chat:notice', { text: `${socket.data.author} joined the chat` });
+  socket.on('chat:select', async (roomId: unknown) => {
+    if (typeof roomId !== 'string') return;
+    const userId = socket.data.userId as string;
+    if (roomId !== 'public' && !(await Group.exists({ _id: roomId, members: userId }))) return;
+    const previous = socket.data.roomId as string;
+    socket.leave(previous); socket.data.roomId = roomId; socket.join(roomId);
+  });
   socket.on('chat:message', async (value: unknown) => {
     const author = socket.data.author as string | undefined;
     const text = typeof value === 'string' ? value.trim() : '';
     if (!author || !text || text.length > 2000) return;
     try {
-      const message = await Message.create({ author, text });
-      io.emit('chat:message', { id: message.id, author: message.author, text: message.text, createdAt: message.createdAt });
+      const roomId = socket.data.roomId as string;
+      const message = await Message.create({ author, text, roomId });
+      io.to(roomId).emit('chat:message', { id: message.id, author: message.author, text: message.text, createdAt: message.createdAt });
     } catch {
       socket.emit('chat:error', 'Could not save your message. Please try again.');
     }
@@ -110,7 +147,7 @@ async function start() {
   await mongoose.connect(mongoUri);
   const db = mongoose.connection.db;
   if (!db) throw new Error('MongoDB connection did not provide a database.');
-  for (const collection of ['users', 'messages']) {
+  for (const collection of ['users', 'messages', 'groups']) {
     try { await db.createCollection(collection); }
     catch (error) { if ((error as { code?: number }).code !== 48) throw error; }
   }
