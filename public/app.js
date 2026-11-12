@@ -10,6 +10,7 @@
   const toast = document.querySelector('#toast');
   const colors = ['#7b72d8', '#ed8a68', '#4eaa8b', '#d66b9e', '#5d8fce', '#bd8b45'];
   let user = null; let registering = true; let toastTimer; let currentRoom = 'public'; let roomRequest = 0;
+  let activeFilter = 'all';
   const escape = (value) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   const timeLabel = (date) => new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).format(new Date(date));
@@ -21,7 +22,7 @@
     const mine = message.author === user?.username;
     const row = document.createElement('article'); row.className = `message-row ${mine ? 'mine' : ''}`;
     const color = mine ? user.color : colors[(message.author.charCodeAt(0) || 0) % colors.length];
-    row.innerHTML = `${mine ? '' : `<div class="person-avatar" style="--avatar:${color}">${escape(initials(message.author))}</div>`}<div class="message-content">${mine ? '' : `<div class="author">${escape(message.author)}</div>`}<div class="message-bubble">${escape(message.text).replace(/\n/g, '<br>')}</div><time>${timeLabel(message.createdAt)}</time></div>`;
+    row.innerHTML = `${mine ? '' : `<div class="person-avatar" style="--avatar:${color}">${escape(initials(message.author))}</div>`}<div class="message-content">${mine ? '' : `<button class="author profile-link" data-username="${escape(message.author)}">${escape(message.author)}</button>`}<div class="message-bubble">${escape(message.text).replace(/\n/g, '<br>')}</div><time>${timeLabel(message.createdAt)}</time></div>`;
     messages.appendChild(row); messages.scrollTop = messages.scrollHeight;
     document.querySelector('#lastPreview').textContent = `${mine ? 'You: ' : `${message.author}: `}${message.text}`;
     document.querySelector('#lastTime').textContent = timeLabel(message.createdAt);
@@ -41,10 +42,27 @@
     const groups = await response.json(); const list = document.querySelector('#groupList'); list.replaceChildren();
     document.querySelector('#chatCount').textContent = groups.length;
     for (const group of groups.filter((item) => item.id !== 'public')) {
-      const card = document.createElement('button'); card.className = 'conversation'; card.dataset.room = group.id;
+      const card = document.createElement('button'); card.className = 'conversation'; card.dataset.room = group.id; card.dataset.group = 'true';
       card.innerHTML = `<div class="room-avatar"><span>♧</span></div><div class="conversation-copy"><div class="conversation-title"><strong>${escape(group.name)}</strong></div><div class="conversation-preview">Group chat</div></div>`;
       card.addEventListener('click', () => selectRoom(group)); list.appendChild(card);
     }
+    applyChatFilter();
+  }
+  function applyChatFilter() {
+    const cards = [...document.querySelectorAll('.conversation')];
+    const visibleCards = cards.filter((card) => {
+      if (activeFilter === 'groups') return card.dataset.group === 'true';
+      if (activeFilter === 'unread') return card.dataset.unread === 'true';
+      return true;
+    });
+    cards.forEach((card) => { card.hidden = !visibleCards.includes(card); });
+    document.querySelector('.section-label').hidden = activeFilter === 'groups' || activeFilter === 'unread';
+    const note = document.querySelector('.empty-note');
+    note.hidden = visibleCards.length > 0;
+    note.textContent = activeFilter === 'unread' ? 'You’re all caught up.' : activeFilter === 'groups' ? 'No group chats yet. Create one to get started.' : 'A little room for good conversations.';
+    document.querySelector('#chatCount').textContent = activeFilter === 'unread' ? visibleCards.length : cards.length;
+    const unreadCount = cards.filter((card) => card.dataset.unread === 'true').length;
+    document.querySelector('[data-filter="unread"] span').textContent = unreadCount;
   }
   function selectRoom(room) {
     currentRoom = room.id;
@@ -103,13 +121,105 @@
   socket.on('connect_error', () => { showToast('Chat connection lost. Please log in again.'); });
   socket.on('chat:notice', (notice) => { const line = document.createElement('div'); line.className = 'notice'; line.textContent = notice.text; messages.appendChild(line); messages.scrollTop = messages.scrollHeight; });
   document.querySelector('#dismissWelcome').addEventListener('click', (event) => event.currentTarget.closest('.welcome-banner').remove());
+  const profileDialog = document.querySelector('#profileDialog');
+  const profileForm = document.querySelector('#profileForm');
+  const profileFields = document.querySelector('#profileFields');
+  const profileKeys = [['displayName', 'Display name', 40], ['statusMessage', 'Status message', 80], ['bio', 'About', 300], ['location', 'Location', 60], ['website', 'Website', 120]];
+  let viewedProfile = null;
+  function showProfile(profile, editing = false) {
+    viewedProfile = profile;
+    document.querySelector('#profileName').textContent = profile.displayName || profile.username;
+    document.querySelector('#profileUsername').textContent = `@${profile.username}`;
+    document.querySelector('#profileStatus').textContent = profile.statusMessage || '';
+    document.querySelector('#profileAvatar').textContent = initials(profile.displayName || profile.username);
+    profileFields.innerHTML = profileKeys.map(([key, label, max]) => {
+      const value = profile[key] || '';
+      return `<label class="profile-field"><span>${label}</span>${editing ? `<input name="${key}" maxlength="${max}" value="${escape(value)}" ${key === 'website' ? 'type="url" placeholder="https://example.com"' : ''}>` : `<div>${key === 'website' && value ? `<a href="${escape(value)}" target="_blank" rel="noopener noreferrer">${escape(value)}</a>` : escape(value) || '<span class="profile-empty">Not set</span>'}</div>`}</label>`;
+    }).join('') + `<div class="profile-field"><span>Member since</span><div>${profile.createdAt ? new Intl.DateTimeFormat([], { dateStyle: 'medium' }).format(new Date(profile.createdAt)) : '—'}</div></div>`;
+    const own = user && profile.username === user.username;
+    document.querySelector('#editProfileButton').hidden = !own || editing;
+    document.querySelector('#saveProfileButton').hidden = !own || !editing;
+    document.querySelector('#cancelProfile').textContent = editing ? 'Cancel' : 'Close';
+    document.querySelector('#profileError').textContent = '';
+  }
+  async function openProfile(username = user?.username) {
+    if (!username) return;
+    try {
+      const response = await fetch(`/api/users/${encodeURIComponent(username)}`);
+      const profile = await response.json(); if (!response.ok) throw new Error(profile.error || 'Could not load profile.');
+      showProfile(profile); profileDialog.showModal();
+    } catch (error) { showToast(error.message || 'Could not load profile.'); }
+  }
+  document.querySelector('#myAvatar').addEventListener('click', () => openProfile());
+  messages.addEventListener('click', (event) => { const link = event.target.closest('.profile-link'); if (link) openProfile(link.dataset.username); });
+  document.querySelector('#closeProfileDialog').addEventListener('click', () => profileDialog.close());
+  document.querySelector('#cancelProfile').addEventListener('click', () => { if (document.querySelector('#saveProfileButton').hidden === false) showProfile(viewedProfile); else profileDialog.close(); });
+  document.querySelector('#editProfileButton').addEventListener('click', () => showProfile(viewedProfile, true));
+  profileForm.addEventListener('submit', async (event) => {
+    event.preventDefault(); const errorNode = document.querySelector('#profileError'); errorNode.textContent = '';
+    const payload = Object.fromEntries(profileKeys.map(([key]) => [key, profileForm.elements.namedItem(key).value]));
+    const button = document.querySelector('#saveProfileButton'); button.disabled = true;
+    try {
+      const response = await fetch('/api/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not save profile.');
+      user = { ...user, ...result }; document.querySelector('#myAvatar').textContent = initials(user.displayName || user.username);
+      showProfile(result); showToast('Profile updated.');
+    } catch (error) { errorNode.textContent = error.message || 'Could not save profile.'; }
+    finally { button.disabled = false; }
+  });
   document.querySelector('#roomCard').addEventListener('click', () => selectRoom({ id: 'public', name: 'Good vibes only' }));
+  document.querySelectorAll('.filter').forEach((button) => button.addEventListener('click', () => {
+    activeFilter = button.dataset.filter;
+    document.querySelectorAll('.filter').forEach((filter) => {
+      const selected = filter === button;
+      filter.classList.toggle('active', selected);
+      filter.setAttribute('aria-pressed', String(selected));
+    });
+    applyChatFilter();
+  }));
   const groupDialog = document.querySelector('#groupDialog');
   const groupForm = document.querySelector('#groupForm');
   const groupNameInput = document.querySelector('#groupNameInput');
   const groupMembersInput = document.querySelector('#groupMembersInput');
+  const inviteSuggestions = document.querySelector('#inviteSuggestions');
   const groupError = document.querySelector('#groupError');
-  const closeGroupDialog = () => { groupDialog.close(); groupForm.reset(); groupError.textContent = ''; };
+  let inviteSearchTimer; let inviteSearchRequest = 0;
+  function hideInviteSuggestions() { inviteSuggestions.hidden = true; inviteSuggestions.replaceChildren(); }
+  groupMembersInput.addEventListener('input', () => {
+    clearTimeout(inviteSearchTimer);
+    const requestId = ++inviteSearchRequest;
+    const query = groupMembersInput.value.split(',').at(-1).trim();
+    if (query.length < 2) { hideInviteSuggestions(); return; }
+    inviteSearchTimer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/users?search=${encodeURIComponent(query)}`);
+        const profiles = await response.json();
+        if (requestId !== inviteSearchRequest) return;
+        inviteSuggestions.replaceChildren();
+        for (const profile of profiles) {
+          const item = document.createElement('div'); item.className = 'invite-suggestion'; item.setAttribute('role', 'option');
+          const avatar = document.createElement('span'); avatar.className = 'invite-avatar'; avatar.textContent = initials(profile.displayName || profile.username);
+          const details = document.createElement('span'); details.className = 'invite-details';
+          const name = document.createElement('strong'); name.textContent = profile.displayName || profile.username;
+          const username = document.createElement('span'); username.textContent = `@${profile.username}`;
+          const status = document.createElement('small'); status.textContent = profile.statusMessage || profile.bio || 'No status message';
+          details.append(name, username, status);
+          const actions = document.createElement('span'); actions.className = 'invite-actions';
+          const view = document.createElement('button'); view.type = 'button'; view.textContent = 'Profile';
+          view.addEventListener('click', (event) => { event.stopPropagation(); openProfile(profile.username); });
+          const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
+          add.addEventListener('click', () => {
+            const names = groupMembersInput.value.split(',').slice(0, -1).map((value) => value.trim()).filter(Boolean);
+            if (!names.some((value) => value.toLowerCase() === profile.username.toLowerCase())) names.push(profile.username);
+            groupMembersInput.value = `${names.join(', ')}, `; groupMembersInput.focus(); hideInviteSuggestions();
+          });
+          actions.append(view, add); item.append(avatar, details, actions); inviteSuggestions.append(item);
+        }
+        inviteSuggestions.hidden = profiles.length === 0;
+      } catch { hideInviteSuggestions(); }
+    }, 220);
+  });
+  const closeGroupDialog = () => { groupDialog.close(); groupForm.reset(); groupError.textContent = ''; hideInviteSuggestions(); };
   document.querySelector('#newGroupButton').addEventListener('click', () => {
     groupError.textContent = ''; groupDialog.showModal(); groupNameInput.focus();
   });

@@ -16,6 +16,11 @@ const cookieOptions = { httpOnly: true, sameSite: 'lax' as const, secure: proces
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, trim: true, minlength: 3, maxlength: 24 },
   passwordHash: { type: String, required: true },
+  displayName: { type: String, trim: true, maxlength: 40, default: '' },
+  statusMessage: { type: String, trim: true, maxlength: 80, default: '' },
+  bio: { type: String, trim: true, maxlength: 300, default: '' },
+  location: { type: String, trim: true, maxlength: 60, default: '' },
+  website: { type: String, trim: true, maxlength: 120, default: '' },
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 const messageSchema = new mongoose.Schema({
@@ -70,7 +75,44 @@ app.post('/api/auth/logout', (_req, res) => res.clearCookie('chat_token', { http
 app.get('/api/auth/me', async (req, res) => {
   const user = await userFromToken(req.cookies.chat_token);
   if (!user) return res.status(401).json({ error: 'Please log in.' });
-  res.json({ id: user._id, username: user.username });
+  const profile = await User.findById(user._id).select('_id username displayName statusMessage bio location website createdAt').lean();
+  res.json(profileForClient(profile));
+});
+function profileForClient(user: any) {
+  return { id: String(user._id), username: user.username, displayName: user.displayName || user.username, statusMessage: user.statusMessage || '', bio: user.bio || '', location: user.location || '', website: user.website || '', createdAt: user.createdAt };
+}
+app.get('/api/users/:username', async (req, res) => {
+  const username = req.params.username;
+  const profile = await User.findOne({ username }).select('_id username displayName statusMessage bio location website createdAt').lean();
+  if (!profile) return res.status(404).json({ error: 'User not found.' });
+  res.json(profileForClient(profile));
+});
+app.get('/api/users', async (req, res) => {
+  const user = await userFromToken(req.cookies.chat_token);
+  if (!user) return res.status(401).json({ error: 'Please log in.' });
+  const query = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 24) : '';
+  if (query.length < 2) return res.json([]);
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = await User.find({ _id: { $ne: user._id }, $or: [{ username: new RegExp(`^${escaped}`, 'i') }, { displayName: new RegExp(escaped, 'i') }] })
+    .select('_id username displayName statusMessage bio location website createdAt').limit(8).lean();
+  res.json(matches.map(profileForClient));
+});
+app.patch('/api/profile', async (req, res) => {
+  const user = await userFromToken(req.cookies.chat_token);
+  if (!user) return res.status(401).json({ error: 'Please log in.' });
+  const fields = ['displayName', 'statusMessage', 'bio', 'location', 'website'] as const;
+  const limits = { displayName: 40, statusMessage: 80, bio: 300, location: 60, website: 120 };
+  const update: Record<string, string> = {};
+  for (const field of fields) {
+    if (typeof req.body?.[field] !== 'string') return res.status(400).json({ error: 'Profile fields must be text.' });
+    const value = req.body[field].trim();
+    if (value.length > limits[field]) return res.status(400).json({ error: `${field} is too long.` });
+    if (field === 'website' && value && !/^https?:\/\//i.test(value)) return res.status(400).json({ error: 'Website must start with http:// or https://.' });
+    update[field] = value;
+  }
+  const profile = await User.findByIdAndUpdate(user._id, { $set: update }, { new: true }).select('_id username displayName statusMessage bio location website createdAt').lean();
+  if (!profile) return res.status(404).json({ error: 'User not found.' });
+  res.json(profileForClient(profile));
 });
 app.get('/api/health', (_req, res) => res.json({ status: mongoose.connection.readyState === 1 ? 'ok' : 'connecting' }));
 app.get('/api/groups', async (req, res) => {
